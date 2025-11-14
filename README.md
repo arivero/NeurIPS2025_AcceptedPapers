@@ -20,6 +20,12 @@ python parse_neurips_data.py --summary
 
 # Show top institutions and authors
 python parse_neurips_data.py --top-institutions 10 --top-authors 10
+
+# Generate the per-paper innovation/interdisciplinary/highlight scores
+python generate_scores.py
+
+# Build category-specific top-10 leaderboards (LLMs, companies, universities, Europe)
+python generate_category_top10.py
 ```
 
 ## License

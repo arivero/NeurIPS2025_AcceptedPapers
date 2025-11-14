@@ -1,5 +1,21 @@
 #!/usr/bin/env python3
-"""Generate category-specific top-10 rankings for NeurIPS 2025 papers.
+
+"""Generate category-specific top-10 lists for NeurIPS 2025 papers.
+
+This script expects the score CSV files produced by :mod:`generate_scores`
+so that every accepted paper has innovation, interdisciplinary, and
+session-adjusted highlight scores.  It then builds a composite score and
+exports four rankings:
+
+* Large language model (LLM) papers
+* Papers led by private companies
+* Papers led by universities
+* Papers led by European institutions
+
+The outputs are written to the ``top10`` directory as both CSV files and a
+single Markdown report summarising all categories.
+
+Generate category-specific top-10 rankings for NeurIPS 2025 papers.
 
 The script assumes that ``generate_scores.py`` has already been executed so
 that per-paper scores exist in the ``scores`` directory. It computes the same
@@ -18,6 +34,7 @@ report.
 from __future__ import annotations
 
 import json
+
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Mapping, Sequence, Set
 
@@ -334,6 +351,7 @@ def main() -> None:
     _build_markdown_report(rankings)
 
     print("Generated category-specific top 10 reports in 'top10'.")
+
 
 
 if __name__ == "__main__":
