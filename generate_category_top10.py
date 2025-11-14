@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+
 """Generate category-specific top-10 lists for NeurIPS 2025 papers.
 
 This script expects the score CSV files produced by :mod:`generate_scores`
@@ -13,482 +14,344 @@ exports four rankings:
 
 The outputs are written to the ``top10`` directory as both CSV files and a
 single Markdown report summarising all categories.
+
+Generate category-specific top-10 rankings for NeurIPS 2025 papers.
+
+The script assumes that ``generate_scores.py`` has already been executed so
+that per-paper scores exist in the ``scores`` directory. It computes the same
+composite metric as ``generate_revolutionary_top10.py`` and then filters papers
+into several stakeholder-focused leaderboards:
+
+* Top 10 papers focused on large language models (LLMs).
+* Top 10 papers featuring private company participation.
+* Top 10 papers led by universities (no industry-affiliated authors).
+* Top 10 papers featuring European institutions.
+
+Outputs are saved in ``top10`` as both CSV files and a consolidated Markdown
+report.
 """
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List
+from typing import Callable, Dict, Iterable, List, Mapping, Sequence, Set
 
 import pandas as pd
 
+from generate_revolutionary_top10 import (
+    _attach_metadata,
+    _compute_composite_scores,
+    _load_metadata,
+    _load_scores,
+)
 
-SCORE_FILES: Dict[str, str] = {
-    "innovation": "innovation_score.csv",
-    "interdisciplinary": "interdisciplinary_score.csv",
-    "session_adjusted_highlight": "session_adjusted_highlight_score.csv",
-}
+REPO_ROOT = Path(__file__).resolve().parent
+DATA_PATH = REPO_ROOT / "neurips-2025-orals-posters.json"
+SCORES_DIR = REPO_ROOT / "scores"
+OUTPUT_DIR = REPO_ROOT / "top10"
 
-SCORE_WEIGHTS: Dict[str, float] = {
-    "innovation": 0.6,
-    "interdisciplinary": 0.25,
-    "session_adjusted_highlight": 0.15,
-}
-
-LLM_TERMS: Iterable[str] = {
+LLM_KEYWORDS: Set[str] = {
     "large language model",
-    "llm",
+    "large-language model",
     "language model",
+    "llm",
     "foundation model",
-    "instruction tuning",
     "in-context learning",
+    "instruction tuning",
+    "alignment",
     "reasoning model",
+    "chatbot",
+    "decoder-only",
+    "multi-modal large model",
+    "prompt learning",
 }
 
-PRIVATE_COMPANY_KEYWORDS: Iterable[str] = {
+PRIVATE_COMPANY_KEYWORDS: Set[str] = {
     "google",
     "deepmind",
-    "google research",
-    "google deepmind",
-    "meta",
-    "facebook ai",
-    "amazon",
-    "aws",
-    "microsoft",
+    "waymo",
+    "x company",
     "openai",
     "anthropic",
-    "nvidia",
+    "meta",
+    "facebook",
+    "microsoft",
+    "amazon",
+    "aws",
     "apple",
+    "nvidia",
     "ibm",
     "salesforce",
     "bytedance",
-    "tiktok",
-    "alibaba",
     "tencent",
-    "huawei",
+    "alibaba",
     "baidu",
     "sensetime",
-    "bloomberg",
-    "adobe",
+    "sense time",
+    "huawei",
     "intel",
-    "samsung",
     "qualcomm",
-    "sony",
-    "xiaomi",
-    "naver",
-    "yandex",
+    "samsung",
     "oracle",
-    "databricks",
-    "graphcore",
-    "arm",
-    "bosch",
-    "siemens",
-    "sap",
-    "servicenow",
-    "snowflake",
     "uber",
-    "lyft",
+    "adobe",
+    "snap",
+    "xiaomi",
+    "databricks",
+    "cohere",
+    "megvii",
+    "megvii technology",
+    "kuaishou",
+    "jd.com",
+    "jd explore",
+    "meituan",
+    "ant group",
+    "ping an",
+    "horizon robotics",
+    "hewlett packard",
+    "asml",
+    "stability ai",
+    "sony",
+    "china telecom",
+    "memtensor",
+    "didi",
+    "hpc-ai",
+    "hugging face",
 }
 
-UNIVERSITY_KEYWORDS: Iterable[str] = {
+UNIVERSITY_KEYWORDS: Set[str] = {
     "university",
     "université",
+    "universita",
     "universitat",
-    "università",
-    "universidade",
-    "universidad",
     "college",
-    "polytechnic",
+    "institut",
     "institute of technology",
+    "polytechnic",
     "école",
-    "schule",
     "school of",
 }
 
-EUROPE_KEYWORDS: Iterable[str] = {
+EUROPE_KEYWORDS: Set[str] = {
+    "austria",
+    "belgium",
+    "croatia",
+    "cyprus",
+    "czech",
+    "denmark",
+    "estonia",
+    "finland",
+    "france",
+    "germany",
+    "greece",
+    "hungary",
+    "iceland",
+    "ireland",
+    "italy",
+    "latvia",
+    "liechtenstein",
+    "lithuania",
+    "luxembourg",
+    "malta",
+    "netherlands",
+    "norway",
+    "poland",
+    "portugal",
+    "romania",
+    "slovakia",
+    "slovenia",
+    "spain",
+    "sweden",
+    "switzerland",
+    "turkey",
     "united kingdom",
     "uk",
     "england",
     "scotland",
     "wales",
-    "ireland",
-    "germany",
-    "france",
-    "spain",
-    "portugal",
-    "italy",
-    "netherlands",
-    "belgium",
-    "switzerland",
-    "zurich",
-    "lausanne",
-    "austria",
-    "sweden",
-    "norway",
-    "finland",
-    "denmark",
-    "iceland",
-    "estonia",
-    "latvia",
-    "lithuania",
-    "poland",
-    "czech",
-    "slovak",
-    "hungary",
-    "romania",
-    "bulgaria",
-    "croatia",
-    "serbia",
-    "slovenia",
-    "greece",
-    "cyprus",
-    "malta",
-    "luxembourg",
-    "liechtenstein",
-    "monaco",
-    "andorra",
-    "san marino",
-    "vatican",
-    "norwegian",
-    "french",
-    "italian",
-    "german",
-    "dutch",
-    "spanish",
-    "portuguese",
-    "danish",
-    "swiss",
-    "swedish",
-    "finnish",
-    "polish",
 }
 
 
-@dataclass
-class PaperMetadata:
-    """Container for auxiliary metadata used in category detection."""
-
-    title: str
-    decision: str | None
-    openreview_url: str | None
-    abstract: str
-    keywords: List[str]
-    institutions: List[str]
-
-
-@dataclass
-class CategoryDefinition:
-    """Describe an individual ranking."""
-
-    name: str
-    label: str
-    predicate: Callable[[PaperMetadata], bool]
-
-
-def _load_scores(scores_dir: Path) -> pd.DataFrame:
-    """Load and merge all score CSV files into a single DataFrame."""
-
-    frames: List[pd.DataFrame] = []
-    for score_name, filename in SCORE_FILES.items():
-        csv_path = scores_dir / filename
-        if not csv_path.exists():
-            raise FileNotFoundError(f"Score file not found: {csv_path}")
-
-        df = pd.read_csv(csv_path)
-        expected_columns = {"paper_id", "title", "score"}
-        if set(df.columns) != expected_columns:
-            raise ValueError(
-                f"Unexpected columns in {csv_path}. Expected {expected_columns}, got {set(df.columns)}"
-            )
-        frames.append(df.rename(columns={"score": f"{score_name}_score"}))
-
-    merged = frames[0]
-    for other in frames[1:]:
-        merged = merged.merge(
-            other,
-            on=["paper_id", "title"],
-            how="inner",
-            validate="one_to_one",
-        )
-    return merged
-
-
-def _min_max_normalize(series: pd.Series) -> pd.Series:
-    """Min-max normalise a numeric series."""
-
-    min_value = series.min()
-    max_value = series.max()
-    if max_value == min_value:
-        return pd.Series([1.0] * len(series), index=series.index)
-    return (series - min_value) / (max_value - min_value)
-
-
-def _compute_composite_scores(df: pd.DataFrame) -> pd.DataFrame:
-    """Compute the weighted composite score."""
-
-    result = df.copy()
-    for score_name in SCORE_FILES:
-        score_column = f"{score_name}_score"
-        normalised_column = f"{score_name}_normalised"
-        result[normalised_column] = _min_max_normalize(result[score_column])
-
-    result["composite_score"] = 0.0
-    for score_name, weight in SCORE_WEIGHTS.items():
-        normalised_column = f"{score_name}_normalised"
-        result["composite_score"] += result[normalised_column] * weight
-    return result
-
-
-def _normalise_institution(raw: str | None) -> str:
-    if not raw:
-        return ""
-    return raw.strip()
-
-
-def _load_metadata(json_path: Path) -> Dict[int, PaperMetadata]:
-    """Load metadata such as abstracts, keywords, and institutions."""
-
-    with json_path.open("r", encoding="utf-8") as handle:
+def _load_full_metadata(path: Path) -> Dict[int, Dict[str, object]]:
+    with path.open("r", encoding="utf-8") as handle:
         payload = json.load(handle)
-
-    results: Dict[int, PaperMetadata] = {}
-    for entry in payload.get("results", []):
-        paper_id = entry.get("id")
-        if paper_id is None:
-            continue
-
-        institutions = [
-            _normalise_institution(author.get("institution"))
-            for author in entry.get("authors", [])
-            if _normalise_institution(author.get("institution"))
-        ]
-        metadata = PaperMetadata(
-            title=entry.get("name", ""),
-            decision=entry.get("decision"),
-            openreview_url=entry.get("paper_url")
-            or entry.get("virtualsite_url")
-            or entry.get("sourceurl"),
-            abstract=entry.get("abstract", ""),
-            keywords=list(entry.get("keywords", []) or []),
-            institutions=institutions,
-        )
-        results[int(paper_id)] = metadata
-    return results
+    results = payload.get("results", [])
+    return {int(entry["id"]): entry for entry in results if entry.get("id") is not None}
 
 
-def _attach_metadata(df: pd.DataFrame, metadata: Dict[int, PaperMetadata]) -> pd.DataFrame:
-    """Append metadata columns to the scores DataFrame."""
-
-    records: List[Dict[str, object]] = []
-    for _, row in df.iterrows():
-        paper_id = int(row["paper_id"])
-        meta = metadata.get(paper_id)
-        if not meta:
-            meta = PaperMetadata("", None, None, "", [], [])
-        records.append(
-            {
-                "paper_id": paper_id,
-                "title": meta.title or row["title"],
-                "decision": meta.decision,
-                "openreview_url": meta.openreview_url,
-                "abstract": meta.abstract,
-                "keywords": meta.keywords,
-                "institutions": meta.institutions,
-            }
-        )
-
-    meta_df = pd.DataFrame.from_records(records)
-    merged = df.drop(columns=["title"]).merge(
-        meta_df,
-        on="paper_id",
-        how="left",
-        validate="one_to_one",
-    )
-    # Ensure title column is last merge result to avoid duplicate naming
-    ordered_columns = [
-        "paper_id",
-        "title",
-        "composite_score",
-        "innovation_score",
-        "interdisciplinary_score",
-        "session_adjusted_highlight_score",
-        "innovation_normalised",
-        "interdisciplinary_normalised",
-        "session_adjusted_highlight_normalised",
-        "decision",
-        "openreview_url",
-        "abstract",
-        "keywords",
-        "institutions",
-    ]
-    return merged[ordered_columns]
+def _collect_institutions(paper: Mapping[str, object]) -> List[str]:
+    institutions: List[str] = []
+    for author in paper.get("authors", []) or []:
+        inst = (author.get("institution") or "")
+        inst = inst.strip(" ,;")
+        if inst:
+            institutions.append(inst)
+    return institutions
 
 
-def _text_blob(meta: PaperMetadata) -> str:
-    keyword_text = " ".join(meta.keywords)
-    components = [meta.title, meta.abstract, keyword_text]
-    return " ".join(filter(None, components)).lower()
+def _normalise_text(values: Iterable[str]) -> List[str]:
+    return [value.lower() for value in values]
 
 
-def _contains_any(text: str, terms: Iterable[str]) -> bool:
-    lowered = text.lower()
-    return any(term in lowered for term in terms)
+def _paper_text_blurb(paper: Mapping[str, object]) -> str:
+    components: List[str] = [paper.get("name") or "", paper.get("abstract") or ""]
+    keywords = paper.get("keywords") or []
+    if isinstance(keywords, Sequence):
+        components.extend(str(keyword) for keyword in keywords)
+    return " \n ".join(component.lower() for component in components if component)
 
 
-def _is_llm(meta: PaperMetadata) -> bool:
-    return _contains_any(_text_blob(meta), LLM_TERMS)
+def _matches_any(text: str, keywords: Set[str]) -> bool:
+    return any(keyword in text for keyword in keywords)
 
 
-def _has_private_company(meta: PaperMetadata) -> bool:
-    for institution in meta.institutions:
-        lowered = institution.lower()
-        if any(keyword in lowered for keyword in PRIVATE_COMPANY_KEYWORDS):
-            return True
-    return False
+def is_llm_paper(paper: Mapping[str, object]) -> bool:
+    return _matches_any(_paper_text_blurb(paper), LLM_KEYWORDS)
 
 
-def _has_university(meta: PaperMetadata) -> bool:
-    for institution in meta.institutions:
-        lowered = institution.lower()
-        if any(keyword in lowered for keyword in UNIVERSITY_KEYWORDS):
-            return True
-    return False
+def is_private_company_paper(paper: Mapping[str, object]) -> bool:
+    institutions = _normalise_text(_collect_institutions(paper))
+    return any(any(keyword in inst for keyword in PRIVATE_COMPANY_KEYWORDS) for inst in institutions)
 
 
-def _is_european(meta: PaperMetadata) -> bool:
-    for institution in meta.institutions:
-        lowered = institution.lower()
-        if any(keyword in lowered for keyword in EUROPE_KEYWORDS):
-            return True
-    return False
-
-
-def _format_institutions(institutions: List[str]) -> str:
+def is_university_led_paper(paper: Mapping[str, object]) -> bool:
+    institutions = _normalise_text(_collect_institutions(paper))
     if not institutions:
-        return "N/A"
-    unique = []
-    seen = set()
-    for inst in institutions:
-        if inst not in seen:
-            unique.append(inst)
-            seen.add(inst)
-    return "; ".join(unique)
+        return False
+    has_university = any(any(keyword in inst for keyword in UNIVERSITY_KEYWORDS) for inst in institutions)
+    has_private = any(any(keyword in inst for keyword in PRIVATE_COMPANY_KEYWORDS) for inst in institutions)
+    return has_university and not has_private
 
 
-def _build_ranked_table(df: pd.DataFrame, metadata: Dict[int, PaperMetadata], predicate: Callable[[PaperMetadata], bool]) -> pd.DataFrame:
-    rows: List[Dict[str, object]] = []
-    for paper_id, meta in metadata.items():
-        if not predicate(meta):
+def is_european_paper(paper: Mapping[str, object]) -> bool:
+    institutions = _normalise_text(_collect_institutions(paper))
+    return any(any(keyword in inst for keyword in EUROPE_KEYWORDS) for inst in institutions)
+
+
+CategoryPredicate = Callable[[Mapping[str, object]], bool]
+
+
+def _prepare_scored_dataframe() -> pd.DataFrame:
+    scores = _load_scores(SCORES_DIR)
+    composite = _compute_composite_scores(scores)
+    metadata = _load_metadata(DATA_PATH)
+    enriched = _attach_metadata(composite, metadata)
+    enriched["paper_id"] = enriched["paper_id"].astype(int)
+    return enriched
+
+
+def _rank_category(
+    scored_df: pd.DataFrame,
+    full_metadata: Mapping[int, Mapping[str, object]],
+    predicate: CategoryPredicate,
+    top_n: int = 10,
+) -> pd.DataFrame:
+    matches = []
+    for _, row in scored_df.iterrows():
+        paper_id = int(row["paper_id"])
+        paper_meta = full_metadata.get(paper_id)
+        if paper_meta is None:
             continue
-        score_row = df[df["paper_id"] == paper_id]
-        if score_row.empty:
+        if not predicate(paper_meta):
             continue
-        record = score_row.iloc[0].to_dict()
-        record.update(
+        institutions = ", ".join(
+            sorted(
+                {
+                    inst
+                    for inst in _collect_institutions(paper_meta)
+                    if inst
+                }
+            )
+        )
+        matches.append(
             {
                 "paper_id": paper_id,
-                "title": meta.title,
-                "decision": meta.decision,
-                "openreview_url": meta.openreview_url,
-                "institutions": meta.institutions,
+                "title": row["title"],
+                "composite_score": row["composite_score"],
+                "innovation_score": row["innovation_score"],
+                "interdisciplinary_score": row["interdisciplinary_score"],
+                "session_adjusted_highlight_score": row["session_adjusted_highlight_score"],
+                "decision": row.get("decision"),
+                "openreview_url": row.get("openreview_url"),
+                "institutions": institutions,
             }
         )
-        rows.append(record)
 
-    if not rows:
+    if not matches:
         return pd.DataFrame()
 
-    table = pd.DataFrame.from_records(rows)
-    table = table.sort_values(by="composite_score", ascending=False).reset_index(drop=True)
-    table["rank"] = table.index + 1
-    table["institutions_formatted"] = table["institutions"].apply(_format_institutions)
-    return table[
-        [
-            "rank",
-            "paper_id",
-            "title",
-            "composite_score",
-            "innovation_score",
-            "interdisciplinary_score",
-            "session_adjusted_highlight_score",
-            "decision",
-            "openreview_url",
-            "institutions_formatted",
-        ]
-    ]
+    result = pd.DataFrame(matches)
+    ranked = result.sort_values(by="composite_score", ascending=False).reset_index(drop=True)
+    ranked.insert(0, "rank", ranked.index + 1)
+    return ranked.head(top_n)
 
 
-def _write_category_csv(table: pd.DataFrame, path: Path) -> None:
-    table.to_csv(path, index=False)
-
-
-def _append_category_markdown(lines: List[str], definition: CategoryDefinition, table: pd.DataFrame) -> None:
-    lines.append(f"## {definition.label}")
-    lines.append("")
-    if table.empty:
-        lines.append("No papers matched this category.\n")
+def _write_category_outputs(category: str, ranking: pd.DataFrame) -> None:
+    if ranking.empty:
         return
 
-    lines.append("| Rank | Title | Composite Score | Lead Institutions | OpenReview |")
-    lines.append("| --- | --- | --- | --- | --- |")
-    for _, row in table.iterrows():
-        title = row["title"].replace("|", "\\|")
-        composite = f"{row['composite_score']:.3f}"
-        institutions = row["institutions_formatted"].replace("|", "\\|")
-        openreview = row.get("openreview_url") or "N/A"
-        if openreview != "N/A":
-            openreview = f"[Link]({openreview})"
-        lines.append(
-            f"| {row['rank']} | {title} | {composite} | {institutions} | {openreview} |"
-        )
-    lines.append("")
+    csv_path = OUTPUT_DIR / f"top10_{category}.csv"
+    ranking.to_csv(csv_path, index=False)
+
+
+def _build_markdown_report(category_tables: Dict[str, pd.DataFrame]) -> None:
+    lines: List[str] = [
+        "# Category-Specific Top 10 NeurIPS 2025 Papers",
+        "",
+        "These rankings are derived from the self-scored dataset covering all 5,945 accepted papers.",
+    ]
+
+    for category, table in category_tables.items():
+        if table.empty:
+            continue
+        pretty_name = {
+            "llm": "Large Language Model Focus",
+            "private_company": "Private Company Participation",
+            "university": "University-Led Research",
+            "europe": "European Institutions",
+        }[category]
+        lines.extend(["", f"## {pretty_name}", "", "| Rank | Title | Composite | Institutions | OpenReview |", "| --- | --- | --- | --- | --- |"])
+        for _, row in table.iterrows():
+            title = row["title"].replace("|", "\\|")
+            composite = f"{row['composite_score']:.3f}"
+            institutions = row["institutions"].replace("|", "\\|")
+            openreview = row.get("openreview_url") or "N/A"
+            if openreview != "N/A":
+                openreview = f"[Link]({openreview})"
+            lines.append(
+                f"| {int(row['rank'])} | {title} | {composite} | {institutions} | {openreview} |"
+            )
+
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    markdown_path = OUTPUT_DIR / "category_rankings.md"
+    markdown_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def main() -> None:
-    repo_root = Path(__file__).resolve().parent
-    scores_dir = repo_root / "scores"
-    json_path = repo_root / "neurips-2025-orals-posters.json"
-    output_dir = repo_root / "top10"
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    scores = _load_scores(scores_dir)
-    scored = _compute_composite_scores(scores)
-    metadata = _load_metadata(json_path)
-    enriched = _attach_metadata(scored, metadata)
+    scored_df = _prepare_scored_dataframe()
+    full_metadata = _load_full_metadata(DATA_PATH)
 
-    categories = [
-        CategoryDefinition("llm", "Top 10 Large Language Model Papers", _is_llm),
-        CategoryDefinition(
-            "private_companies", "Top 10 Papers from Private Companies", _has_private_company
-        ),
-        CategoryDefinition(
-            "universities", "Top 10 Papers from Universities", _has_university
-        ),
-        CategoryDefinition(
-            "europe", "Top 10 European Papers", _is_european
-        ),
-    ]
+    categories: Dict[str, CategoryPredicate] = {
+        "llm": is_llm_paper,
+        "private_company": is_private_company_paper,
+        "university": is_university_led_paper,
+        "europe": is_european_paper,
+    }
 
-    output_dir.mkdir(parents=True, exist_ok=True)
+    rankings: Dict[str, pd.DataFrame] = {}
+    for name, predicate in categories.items():
+        ranking = _rank_category(scored_df, full_metadata, predicate)
+        rankings[name] = ranking
+        _write_category_outputs(name, ranking)
 
-    markdown_lines = [
-        "# Category Top 10 Lists for NeurIPS 2025",
-        "",
-        "Each ranking uses the same composite score as the revolutionary list but is filtered",
-        "to highlight specific slices of the community.",
-        "",
-    ]
+    _build_markdown_report(rankings)
 
-    for definition in categories:
-        table = _build_ranked_table(enriched, metadata, definition.predicate).head(10)
-        csv_path = output_dir / f"category_top10_{definition.name}.csv"
-        _write_category_csv(table, csv_path)
-        _append_category_markdown(markdown_lines, definition, table)
+    print("Generated category-specific top 10 reports in 'top10'.")
 
-    markdown_path = output_dir / "category_top10.md"
-    markdown_path.write_text("\n".join(markdown_lines) + "\n", encoding="utf-8")
-    print(f"Generated category-specific top 10 lists in: {output_dir}")
 
 
 if __name__ == "__main__":
